@@ -168,7 +168,7 @@ module.exports = Jobs;
 | Operation | HTTP Method | Route | Controller Method | Mongoose Method |
 |-----------|-------------|-------|-------------------|-----------------|
 | **Create** | POST | `/api/jobs` | `postJob` | `Jobs.create()` |
-| **Read All** | GET | `/api/jobs` | `getJob` | `Jobs.find()` |
+| **Read All** | GET | `/api/jobs` | `getAllJob` | `Jobs.find()` |
 | **Read One** | GET | `/api/jobs/:id` | `fetchSingleJob` | `Jobs.findById()` |
 | **Update** | PUT | `/api/jobs/:id` | `updateJob` | `Jobs.findByIdAndUpdate()` |
 | **Delete** | DELETE | `/api/jobs/:id` | `deleteJob` | `Jobs.findByIdAndDelete()` |
@@ -301,7 +301,7 @@ exports.postJob = async (req, res) => {
 
 #### Get All Jobs:
 ```javascript
-exports.getJob = async (req, res) => {
+exports.getAllJob = async (req, res) => {
     try {
         const jobs = await Jobs.find();  // Get all jobs
         res.json(jobs);                  // Return array of jobs
