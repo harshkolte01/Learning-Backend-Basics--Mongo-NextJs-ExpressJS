@@ -13,7 +13,7 @@ npm init -y
 
 ### 2. Install Dependencies
 ```bash
-npm install express mongoose dotenv bcryptjs jsonwebtoken multer cloudinary
+npm install express mongoose dotenv bcryptjs jsonwebtoken multer cloudinary nodemailer
 npm install nodemon --save-dev
 npm install --save-dev @types/node @types/mongoose
 ```
@@ -26,6 +26,7 @@ npm install --save-dev @types/node @types/mongoose
 - `jsonwebtoken` - Create and verify JWT tokens for authentication
 - `multer` - Middleware for handling file uploads (multipart/form-data)
 - `cloudinary` - Cloud storage service for images and videos
+- `nodemailer` - Send emails from Node.js (notifications, alerts, etc.)
 - `nodemon` - Auto-restarts server when files change (dev only)
 - `@types/node` & `@types/mongoose` - Better autocomplete in VS Code
 
@@ -45,7 +46,7 @@ my-api-project/
 │
 ├── index.js              # Main entry point (server + error handling)
 ├── dbConnection.js       # MongoDB connection logic
-├── .env                  # Environment variables (MongoDB URI, secrets)
+├── .env                  # Environment variables (MongoDB URI, secrets, email)
 ├── package.json          # Project dependencies
 │
 ├── routes/               # All API routes
@@ -57,14 +58,21 @@ my-api-project/
 ├── controllers/          # Business logic for each route
 │   ├── pingController.js
 │   ├── userController.js
-│   └── jobController.js  # Complete CRUD logic
+│   ├── jobController.js  # Complete CRUD logic + email sending
+│   └── Email.html       # HTML email template for job notifications
 │
 ├── models/               # MongoDB schemas/models
-│   ├── Users.js         # User model
+│   ├── Users.js         # User model (with roles)
 │   └── Jobs.js          # Job model (with validation)
 │
 ├── config/               # Configuration files
-└── middleware/           # Custom middleware (auth, error handlers)
+│   └── cloudinaryConfig.js  # Cloudinary setup
+│
+└── middleware/           # Custom middleware
+    ├── authMiddleware.js    # Authentication & authorization
+    ├── jobMiddleware.js     # Job validation
+    ├── upload.js            # Multer file upload config
+    └── nodeConfig.js        # Nodemailer email config
 ```
 
 ---
@@ -89,6 +97,9 @@ JWT_SECRET_KEY=your-super-secret-key-here-change-this
 CLOUDINARY_CLOUD_NAME=your-cloud-name
 CLOUDINARY_API_KEY=your-api-key
 CLOUDINARY_SECRET_KEY=your-secret-key
+
+GOOGLE_EMAIL=your-email@gmail.com
+GOOGLE_APP_PASSWORD=your-16-char-app-password
 ```
 
 **Important:**
@@ -97,6 +108,7 @@ CLOUDINARY_SECRET_KEY=your-secret-key
 - `PASSWORD_SALT_ROUNDS` - Higher = more secure but slower (10 is good)
 - `JWT_EXPIRY` - Token validity period (1d = 1 day, 7d = 7 days, 1h = 1 hour)
 - Get Cloudinary credentials from [Cloudinary Dashboard](https://cloudinary.com/console)
+- Get Gmail App Password from [Google App Passwords](https://myaccount.google.com/apppasswords) (requires 2-Step Verification)
 
 ### Step 3: Database Connection File
 Create `dbConnection.js`:
@@ -1552,6 +1564,681 @@ if (!title) return res.status(400).json({...});
 // 422 - Valid data but business rule fails
 if (salary < minimumWage) return res.status(422).json({...});
 ```
+
+---
+
+## 📧 Sending Emails with Nodemailer
+
+### What is Nodemailer?
+**Nodemailer** is a module that allows you to send emails from your Node.js application. It's like having a post office inside your app that can send emails automatically.
+
+**Why Send Emails?**
+- Notify users about new job postings
+- Send welcome emails after signup
+- Password reset links
+- Order confirmations
+- Newsletters and updates
+
+---
+
+### 1. **Understanding Email Sending** 📬
+
+```
+Your App → Nodemailer → Gmail/SMTP Server → Recipient's Email
+    ↓          ↓              ↓                    ↓
+  Create    Configure      Send via           User receives
+  Email     Transport      Internet           email
+```
+
+**Step-by-Step:**
+1. Your app creates an email (subject, body, recipient)
+2. Nodemailer connects to email service (Gmail, Outlook, etc.)
+3. Email service sends the email over the internet
+4. Recipient receives the email in their inbox
+
+---
+
+### 2. **Installing Nodemailer** 📦
+
+```bash
+npm install nodemailer
+```
+
+**Add to package.json dependencies:**
+```json
+{
+  "dependencies": {
+    "nodemailer": "^7.0.11"
+  }
+}
+```
+
+---
+
+### 3. **Gmail App Password Setup** 🔐
+
+**Why App Password?**
+Gmail doesn't allow apps to use your regular password for security. You need a special "App Password."
+
+**Steps to Get Gmail App Password:**
+
+1. **Enable 2-Step Verification:**
+   - Go to [Google Account Security](https://myaccount.google.com/security)
+   - Click "2-Step Verification"
+   - Follow steps to enable it
+
+2. **Generate App Password:**
+   - Go to [App Passwords](https://myaccount.google.com/apppasswords)
+   - Select "Mail" and "Other (Custom name)"
+   - Enter name: "Node.js App"
+   - Click "Generate"
+   - Copy the 16-character password (e.g., `gmej ocnn ejgd kgub`)
+
+3. **Add to `.env` file:**
+   ```env
+   GOOGLE_EMAIL=your-email@gmail.com
+   GOOGLE_APP_PASSWORD=gmej ocnn ejgd kgub
+   ```
+
+**Important:**
+- Never use your regular Gmail password
+- Never commit `.env` file to Git
+- App password is 16 characters with spaces
+- Keep it secret and secure
+
+---
+
+### 4. **Nodemailer Configuration** ⚙️
+
+**Create `middleware/nodeConfig.js`:**
+```javascript
+const nodemailer = require("nodemailer");
+
+// Create transporter (email sender)
+const transporter = nodemailer.createTransport({
+    service: "Gmail",                              // Email service
+    auth: {
+        user: process.env.GOOGLE_EMAIL,            // Your Gmail
+        pass: process.env.GOOGLE_APP_PASSWORD      // App password
+    },
+    connectionTimeout: 10000,                      // 10 seconds timeout
+});
+
+module.exports = transporter;
+```
+
+**What is a Transporter?**
+A transporter is like a mail carrier. It knows:
+- Which email service to use (Gmail, Outlook, etc.)
+- Your email credentials
+- How to send emails
+
+**Other Email Services:**
+```javascript
+// Outlook
+service: "Outlook365"
+
+// Yahoo
+service: "Yahoo"
+
+// Custom SMTP
+host: "smtp.example.com"
+port: 587
+```
+
+---
+
+### 5. **HTML Email Template** 🎨
+
+**Create `controllers/Email.html`:**
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>New Job: {{title}}</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      margin: 0;
+      padding: 0;
+    }
+    .email-container {
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .email-header {
+      background-color: #1f2937;
+      color: #ffffff;
+      padding: 16px 24px;
+      text-align: center;
+    }
+    .email-body {
+      padding: 20px 24px;
+    }
+    .job-title {
+      font-size: 22px;
+      font-weight: bold;
+      color: #111827;
+    }
+    .salary {
+      font-size: 16px;
+      font-weight: 600;
+      color: #059669;
+    }
+  </style>
+</head>
+<body>
+  <div class="email-container">
+    <div class="email-header">
+      <h1>New Job Opportunity</h1>
+    </div>
+    <div class="email-body">
+      <p class="job-title">{{title}}</p>
+      <p><strong>Company:</strong> {{company}}</p>
+      <p><strong>Location:</strong> {{location}}</p>
+      <p><strong>Posted On:</strong> {{createdAt}}</p>
+      <p class="salary">Salary: {{salary}}</p>
+      <p>If you're interested, please apply or reach out for more details.</p>
+    </div>
+  </div>
+</body>
+</html>
+```
+
+**What are `{{placeholders}}`?**
+- `{{title}}` - Will be replaced with actual job title
+- `{{company}}` - Will be replaced with company name
+- `{{location}}` - Will be replaced with location
+- These are like blanks in a form that you fill in
+
+---
+
+### 6. **Sending Emails in Controller** 📤
+
+**Update `controllers/jobController.js`:**
+```javascript
+const Jobs = require("../models/Jobs");
+const User = require("../models/Users");
+const fs = require("fs");
+const path = require("path");
+const transporter = require("../middleware/nodeConfig");
+
+exports.postJob = async (req, res) => {
+    try {
+        // 1. Create job in database
+        const job = await Jobs.create(req.body);
+        
+        // 2. Find all employees (users with role "employee")
+        const employees = await User.find({ role: "employee" });
+        
+        // 3. Read HTML email template
+        const templatePath = path.join(__dirname, "Email.html");
+        let emailTemplate = fs.readFileSync(templatePath, "utf-8");
+        
+        // 4. Replace placeholders with actual data
+        emailTemplate = emailTemplate
+            .replace(/{{title}}/g, job.title)
+            .replace(/{{company}}/g, job.company || "Not specified")
+            .replace(/{{location}}/g, job.location || "Remote")
+            .replace(/{{createdAt}}/g, job.createdAt.toDateString())
+            .replace(/{{salary}}/g, job.salary ? `₹${job.salary}` : "Not disclosed");
+        
+        // 5. Send email to each employee
+        for (let employee of employees) {
+            const mailOptions = {
+                from: process.env.GOOGLE_EMAIL,        // Sender
+                to: employee.email,                    // Recipient
+                subject: "New Job Opportunity",        // Email subject
+                html: emailTemplate                    // HTML content
+            };
+            
+            await transporter.sendMail(mailOptions);
+        }
+        
+        // 6. Return created job
+        res.status(201).json(job);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+}
+```
+
+---
+
+### 7. **Understanding the Email Flow** 🔄
+
+**Step-by-Step Breakdown:**
+
+1. **Create Job:**
+   ```javascript
+   const job = await Jobs.create(req.body);
+   ```
+   - Saves job to database
+   - Returns job object with all details
+
+2. **Find Recipients:**
+   ```javascript
+   const employees = await User.find({ role: "employee" });
+   ```
+   - Finds all users with role "employee"
+   - Returns array of user objects
+
+3. **Read Template:**
+   ```javascript
+   const templatePath = path.join(__dirname, "Email.html");
+   let emailTemplate = fs.readFileSync(templatePath, "utf-8");
+   ```
+   - `path.join()` - Creates correct file path
+   - `fs.readFileSync()` - Reads file content as string
+   - `"utf-8"` - Text encoding format
+
+4. **Replace Placeholders:**
+   ```javascript
+   emailTemplate = emailTemplate.replace(/{{title}}/g, job.title);
+   ```
+   - `/{{title}}/g` - Regex pattern (finds all `{{title}}`)
+   - `g` flag - Global (replaces all occurrences)
+   - Replaces with actual job title
+
+5. **Send Emails:**
+   ```javascript
+   for (let employee of employees) {
+       await transporter.sendMail(mailOptions);
+   }
+   ```
+   - Loops through each employee
+   - Sends personalized email to each one
+   - `await` - Waits for email to send before continuing
+
+---
+
+### 8. **Email Options Explained** 📋
+
+```javascript
+const mailOptions = {
+    from: process.env.GOOGLE_EMAIL,           // Sender email
+    to: employee.email,                       // Recipient email
+    subject: "New Job Opportunity",           // Email subject line
+    html: emailTemplate,                      // HTML content
+    // Optional fields:
+    cc: "manager@example.com",                // Carbon copy
+    bcc: "admin@example.com",                 // Blind carbon copy
+    attachments: [                            // File attachments
+        {
+            filename: "job-details.pdf",
+            path: "./files/job-details.pdf"
+        }
+    ]
+};
+```
+
+**Field Explanations:**
+- `from` - Who is sending the email
+- `to` - Who receives the email (can be array for multiple)
+- `subject` - Email subject line (what user sees in inbox)
+- `html` - Email body in HTML format
+- `text` - Plain text version (optional, for email clients that don't support HTML)
+- `cc` - Carbon copy (recipient can see other CC recipients)
+- `bcc` - Blind carbon copy (recipient can't see other BCC recipients)
+
+---
+
+### 9. **Sending to Multiple Recipients** 👥
+
+**Single Recipient:**
+```javascript
+to: "user@example.com"
+```
+
+**Multiple Recipients (Array):**
+```javascript
+to: ["user1@example.com", "user2@example.com", "user3@example.com"]
+```
+
+**Multiple Recipients (String):**
+```javascript
+to: "user1@example.com, user2@example.com, user3@example.com"
+```
+
+**Loop Through Users:**
+```javascript
+for (let employee of employees) {
+    const mailOptions = {
+        from: process.env.GOOGLE_EMAIL,
+        to: employee.email,
+        subject: "New Job Opportunity",
+        html: emailTemplate
+    };
+    await transporter.sendMail(mailOptions);
+}
+```
+
+---
+
+### 10. **Template Placeholders** 🔤
+
+**Using Regular Expressions:**
+```javascript
+// Replace single occurrence
+emailTemplate = emailTemplate.replace("{{title}}", job.title);
+
+// Replace all occurrences (with /g flag)
+emailTemplate = emailTemplate.replace(/{{title}}/g, job.title);
+```
+
+**Multiple Replacements:**
+```javascript
+emailTemplate = emailTemplate
+    .replace(/{{title}}/g, job.title)
+    .replace(/{{company}}/g, job.company || "Not specified")
+    .replace(/{{location}}/g, job.location || "Remote")
+    .replace(/{{salary}}/g, job.salary ? `₹${job.salary}` : "Not disclosed");
+```
+
+**Why `/g` flag?**
+- Without `g`: Replaces only first occurrence
+- With `g`: Replaces all occurrences in the template
+
+**Conditional Values:**
+```javascript
+job.company || "Not specified"
+// If job.company exists → use it
+// If job.company is null/undefined → use "Not specified"
+
+job.salary ? `₹${job.salary}` : "Not disclosed"
+// If salary exists → show "₹80000"
+// If salary doesn't exist → show "Not disclosed"
+```
+
+---
+
+### 11. **Error Handling for Emails** ⚠️
+
+**Basic Error Handling:**
+```javascript
+try {
+    await transporter.sendMail(mailOptions);
+    console.log("Email sent successfully");
+} catch (error) {
+    console.error("Error sending email:", error.message);
+}
+```
+
+**Continue on Email Failure:**
+```javascript
+for (let employee of employees) {
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`Email sent to ${employee.email}`);
+    } catch (error) {
+        console.error(`Failed to send email to ${employee.email}:`, error.message);
+        // Continue to next employee even if this one fails
+    }
+}
+```
+
+**Don't Block Job Creation:**
+```javascript
+exports.postJob = async (req, res) => {
+    try {
+        // Create job first
+        const job = await Jobs.create(req.body);
+        
+        // Send emails (don't wait for completion)
+        sendEmailsToEmployees(job).catch(err => {
+            console.error("Email sending failed:", err);
+        });
+        
+        // Return response immediately
+        res.status(201).json(job);
+    } catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+}
+```
+
+---
+
+### 12. **Testing Email Functionality** 🧪
+
+**Using Thunder Client/Postman:**
+
+1. **Create a job:**
+   ```
+   POST http://localhost:3000/api/jobs
+   Content-Type: application/json
+   
+   {
+     "title": "Full Stack Developer",
+     "company": "Tech Corp",
+     "location": "Remote",
+     "salary": 80000
+   }
+   ```
+
+2. **Check your email inbox:**
+   - All users with role "employee" should receive an email
+   - Email should have job details
+   - HTML formatting should be visible
+
+3. **Check console logs:**
+   ```
+   Email sent to user1@example.com
+   Email sent to user2@example.com
+   ```
+
+---
+
+### 13. **Common Email Issues & Solutions** 🔧
+
+**Issue 1: "Invalid login" error**
+```
+Error: Invalid login: 535-5.7.8 Username and Password not accepted
+```
+**Solution:**
+- Make sure you're using App Password, not regular password
+- Check if 2-Step Verification is enabled
+- Verify email and password in `.env` file
+
+---
+
+**Issue 2: "Connection timeout"**
+```
+Error: Connection timeout
+```
+**Solution:**
+- Check your internet connection
+- Increase `connectionTimeout` in config
+- Try different email service
+
+---
+
+**Issue 3: "Template not found"**
+```
+Error: ENOENT: no such file or directory
+```
+**Solution:**
+- Check file path: `path.join(__dirname, "Email.html")`
+- Make sure `Email.html` is in same folder as controller
+- Use absolute path if needed
+
+---
+
+**Issue 4: Emails going to spam**
+**Solution:**
+- Use professional email subject
+- Don't use too many links
+- Include unsubscribe option
+- Use verified domain (for production)
+
+---
+
+### 14. **Environment Variables for Email** 🔐
+
+**Add to `.env` file:**
+```env
+# Email Configuration
+GOOGLE_EMAIL=your-email@gmail.com
+GOOGLE_APP_PASSWORD=gmej ocnn ejgd kgub
+```
+
+**Important:**
+- Never commit `.env` to Git
+- Add `.env` to `.gitignore`
+- Use different credentials for dev/production
+- Keep App Password secret
+
+---
+
+### 15. **Advanced Email Features** 🚀
+
+**Attachments:**
+```javascript
+const mailOptions = {
+    from: process.env.GOOGLE_EMAIL,
+    to: employee.email,
+    subject: "New Job Opportunity",
+    html: emailTemplate,
+    attachments: [
+        {
+            filename: "job-description.pdf",
+            path: "./files/job-description.pdf"
+        },
+        {
+            filename: "company-logo.png",
+            path: "./images/logo.png"
+        }
+    ]
+};
+```
+
+**Inline Images:**
+```javascript
+attachments: [
+    {
+        filename: "logo.png",
+        path: "./images/logo.png",
+        cid: "logo@company"  // Content ID
+    }
+]
+
+// In HTML template:
+<img src="cid:logo@company" alt="Company Logo" />
+```
+
+**Plain Text Alternative:**
+```javascript
+const mailOptions = {
+    from: process.env.GOOGLE_EMAIL,
+    to: employee.email,
+    subject: "New Job Opportunity",
+    html: emailTemplate,
+    text: `New Job: ${job.title} at ${job.company}`  // Fallback
+};
+```
+
+---
+
+## 🔑 Important Email Concepts
+
+### 1. **SMTP (Simple Mail Transfer Protocol)**
+
+**What is SMTP?**
+The protocol (set of rules) used to send emails over the internet. Like the postal service rules for sending mail.
+
+**SMTP Settings:**
+```javascript
+{
+    host: "smtp.gmail.com",    // SMTP server address
+    port: 587,                 // Port number (587 for TLS)
+    secure: false,             // true for 465, false for other ports
+    auth: {
+        user: "your-email@gmail.com",
+        pass: "your-app-password"
+    }
+}
+```
+
+---
+
+### 2. **Synchronous vs Asynchronous Email Sending**
+
+**Synchronous (Wait for email):**
+```javascript
+await transporter.sendMail(mailOptions);  // Waits for email to send
+res.json({ message: "Job created and email sent" });
+```
+- Slower response
+- User waits for email to send
+- Good for critical emails
+
+**Asynchronous (Don't wait):**
+```javascript
+transporter.sendMail(mailOptions).catch(err => console.error(err));
+res.json({ message: "Job created" });  // Immediate response
+```
+- Faster response
+- Email sends in background
+- Good for non-critical emails
+
+---
+
+### 3. **Email Rate Limits**
+
+**Gmail Limits:**
+- 500 emails per day (free account)
+- 2000 emails per day (Google Workspace)
+- 100 recipients per email
+
+**Best Practices:**
+- Don't send too many emails at once
+- Add delay between emails
+- Use email service providers for bulk emails (SendGrid, Mailgun)
+
+**Adding Delay:**
+```javascript
+for (let employee of employees) {
+    await transporter.sendMail(mailOptions);
+    await new Promise(resolve => setTimeout(resolve, 1000));  // 1 second delay
+}
+```
+
+---
+
+### 4. **HTML vs Plain Text Emails**
+
+| HTML Emails | Plain Text Emails |
+|-------------|-------------------|
+| Beautiful formatting | Simple text only |
+| Images, colors, styles | No formatting |
+| Better user experience | Works everywhere |
+| May go to spam | Less likely to spam |
+
+**Best Practice:** Send both!
+```javascript
+const mailOptions = {
+    html: emailTemplate,                    // HTML version
+    text: "New Job: Developer at Tech Corp" // Plain text fallback
+};
+```
+
+---
+
+### 5. **Email Security**
+
+**Important Security Practices:**
+1. ✅ Use App Passwords (not regular passwords)
+2. ✅ Store credentials in `.env` file
+3. ✅ Never commit `.env` to Git
+4. ✅ Use HTTPS in production
+5. ✅ Validate email addresses before sending
+6. ✅ Implement rate limiting
+7. ✅ Use email verification for signups
 
 ---
 

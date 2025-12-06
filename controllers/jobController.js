@@ -1,8 +1,31 @@
 const Jobs = require("../models/Jobs");
+const User = require("../models/Users")
+const fs = require("fs")
+const transporter = require("../middleware/nodeConfig")
+const path = require("path")
 
 exports.postJob = async (req, res) => {
     try {
         const job = await Jobs.create(req.body);
+        const employees = await User.find({ role: "employee" });
+        const templatePath = path.join(__dirname, "Email.html");
+        let emailTemplate = fs.readFileSync(templatePath, "utf-8");
+        emailTemplate = emailTemplate
+            .replace(/{{title}}/g, job.title)
+            .replace(/{{company}}/g, job.company || "Not specified")
+            .replace(/{{location}}/g, job.location || "Remote / Not specified")
+            .replace(/{{createdAt}}/g, job.createdAt.toDateString())
+            .replace(/{{salary}}/g, job.salary ? `₹${job.salary}` : "Not disclosed");
+
+        for (let employee of employees) {
+            const mailOptions = {
+                from: process.env.GOOGLE_EMAIL,
+                to: employee.email,
+                subject: "new job opportunity",
+                html: emailTemplate
+            };
+            await transporter.sendMail(mailOptions);
+        }
         res.status(201).json(job);
     } catch (error) {
         res.status(400).json({ error: error.message });

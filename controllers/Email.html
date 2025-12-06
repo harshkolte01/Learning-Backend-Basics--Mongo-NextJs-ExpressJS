@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>New Job: {{title}}</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      margin: 0;
+      padding: 0;
+    }
+
+    .email-wrapper {
+      width: 100%;
+      padding: 20px 0;
+    }
+
+    .email-container {
+      max-width: 600px;
+      margin: 0 auto;
+      background-color: #ffffff;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #e0e0e0;
+    }
+
+    .email-header {
+      background-color: #1f2937;
+      color: #ffffff;
+      padding: 16px 24px;
+      text-align: center;
+    }
+
+    .email-header h1 {
+      margin: 0;
+      font-size: 20px;
+    }
+
+    .email-body {
+      padding: 20px 24px;
+    }
+
+    .job-title {
+      font-size: 22px;
+      font-weight: bold;
+      margin: 0 0 10px 0;
+      color: #111827;
+    }
+
+    .job-meta {
+      margin: 0 0 16px 0;
+      color: #4b5563;
+      font-size: 14px;
+    }
+
+    .job-meta span {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .label {
+      font-weight: 600;
+    }
+
+    .highlight-box {
+      background-color: #f9fafb;
+      border-radius: 6px;
+      padding: 12px 14px;
+      margin-bottom: 16px;
+      border: 1px solid #e5e7eb;
+    }
+
+    .salary {
+      font-size: 16px;
+      font-weight: 600;
+      color: #059669;
+    }
+
+    .footer {
+      padding: 12px 24px 18px 24px;
+      font-size: 12px;
+      color: #6b7280;
+      text-align: center;
+      border-top: 1px solid #e5e7eb;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 10px 18px;
+      border-radius: 6px;
+      background-color: #2563eb;
+      color: #ffffff !important;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      margin-top: 12px;
+    }
+
+    @media (max-width: 600px) {
+      .email-container {
+        border-radius: 0;
+      }
+      .email-body {
+        padding: 16px 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="email-wrapper">
+    <div class="email-container">
+
+      <!-- Header -->
+      <div class="email-header">
+        <h1>New Job Opportunity</h1>
+      </div>
+
+      <!-- Body -->
+      <div class="email-body">
+        <p class="job-title">{{title}}</p>
+
+        <p class="job-meta">
+          <span><span class="label">Company:</span> {{company}}</span>
+          <span><span class="label">Location:</span> {{location}}</span>
+          <span><span class="label">Posted On:</span> {{createdAt}}</span>
+        </p>
+
+        <div class="highlight-box">
+          <p class="label">Salary</p>
+          <p class="salary">
+            {{salary}}
+          </p>
+        </div>
+
+        <p>
+          If you’re interested in this role, please apply or reach out to us for more details.
+        </p>
+
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        This is an automated email regarding a job posting.<br />
+        If you did not expect this, you can safely ignore it.
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>
