@@ -13,7 +13,7 @@ npm init -y
 
 ### 2. Install Dependencies
 ```bash
-npm install express mongoose dotenv bcryptjs jsonwebtoken multer cloudinary nodemailer
+npm install express mongoose dotenv bcryptjs jsonwebtoken multer cloudinary nodemailer express-mongo-sanitize xss-clean express-rate-limit helmet cors
 npm install nodemon --save-dev
 npm install --save-dev @types/node @types/mongoose
 ```
@@ -27,6 +27,11 @@ npm install --save-dev @types/node @types/mongoose
 - `multer` - Middleware for handling file uploads (multipart/form-data)
 - `cloudinary` - Cloud storage service for images and videos
 - `nodemailer` - Send emails from Node.js (notifications, alerts, etc.)
+- `express-mongo-sanitize` - Prevents MongoDB injection attacks
+- `xss-clean` - Prevents Cross-Site Scripting (XSS) attacks
+- `express-rate-limit` - Limits requests to prevent spam/DDoS
+- `helmet` - Adds security headers to protect from vulnerabilities
+- `cors` - Enables Cross-Origin Resource Sharing (frontend access)
 - `nodemon` - Auto-restarts server when files change (dev only)
 - `@types/node` & `@types/mongoose` - Better autocomplete in VS Code
 
@@ -2239,6 +2244,627 @@ const mailOptions = {
 5. ✅ Validate email addresses before sending
 6. ✅ Implement rate limiting
 7. ✅ Use email verification for signups
+
+---
+
+## 🛡️ Security Middleware (Sanitization, XSS, Rate Limiting, CORS, Helmet)
+
+### What is Security Middleware?
+**Security Middleware** = Special code that protects your API from attacks and malicious users. It runs before your routes to check and clean incoming requests.
+
+**Why Use Security Middleware?**
+- Prevent hackers from attacking your API
+- Stop malicious code injection
+- Limit spam and abuse
+- Allow safe cross-origin requests
+- Add security headers automatically
+
+---
+
+### 1. **Installing Security Packages** 📦
+
+```bash
+npm install express-mongo-sanitize xss-clean express-rate-limit helmet cors
+```
+
+**What each package does:**
+- `express-mongo-sanitize` - Prevents MongoDB injection attacks
+- `xss-clean` - Prevents Cross-Site Scripting (XSS) attacks
+- `express-rate-limit` - Limits number of requests (prevents spam/DDoS)
+- `helmet` - Adds security headers to responses
+- `cors` - Enables Cross-Origin Resource Sharing (allows frontend to access API)
+
+---
+
+### 2. **Complete Security Setup in index.js** 🔐
+
+```javascript
+const express = require("express");
+const app = express();
+const mongoSanitize = require("express-mongo-sanitize");
+const xss = require("xss-clean");
+const rateLimit = require("express-rate-limit");
+const helmet = require("helmet");
+const cors = require("cors");
+const dotenv = require("dotenv");
+
+dotenv.config();
+
+// 1. Body parser (FIRST - to parse JSON)
+app.use(express.json());
+
+// 2. Security Middleware (BEFORE routes)
+app.use(mongoSanitize());  // Prevent NoSQL injection
+app.use(xss());            // Prevent XSS attacks
+app.use(helmet());         // Add security headers
+app.use(cors({             // Enable CORS
+    origin: "*"            // Allow all origins (change in production)
+}));
+
+// 3. Rate Limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,  // 15 minutes
+    max: 100                    // Max 100 requests per windowMs
+});
+app.use(limiter);
+
+// 4. Database connection
+const connectDB = require("./dbConnection");
+connectDB();
+
+// 5. Routes
+const routes = require("./routes/index");
+app.use("/api", routes);
+
+// 6. Error handler (LAST - after all routes)
+app.use((error, req, res, next) => {
+    res.status(500).json({ error: error.message });
+});
+
+app.listen(3000, () => {
+    console.log("Server running on port 3000");
+});
+```
+
+---
+
+### 3. **MongoDB Injection Prevention** 🚫
+
+**What is MongoDB Injection?**
+An attack where hackers send special MongoDB operators in requests to bypass authentication or access unauthorized data.
+
+**Example Attack:**
+```javascript
+// Hacker sends this login request:
+{
+  "email": { "$gt": "" },    // MongoDB operator
+  "password": { "$gt": "" }  // This bypasses password check!
+}
+```
+
+**How `express-mongo-sanitize` Protects:**
+```javascript
+const mongoSanitize = require("express-mongo-sanitize");
+app.use(mongoSanitize());
+```
+
+**What it does:**
+- Removes `$` and `.` characters from user input
+- Prevents MongoDB operators in requests
+- Cleans query strings, body, and params
+
+**Before Sanitization:**
+```javascript
+req.body = { email: { "$gt": "" }, password: "test" }
+```
+
+**After Sanitization:**
+```javascript
+req.body = { email: "", password: "test" }
+```
+
+**Options:**
+```javascript
+app.use(mongoSanitize({
+    replaceWith: '_',           // Replace $ and . with _
+    onSanitize: ({ req, key }) => {
+        console.warn(`Sanitized ${key}`);
+    }
+}));
+```
+
+---
+
+### 4. **XSS (Cross-Site Scripting) Prevention** 🛡️
+
+**What is XSS?**
+An attack where hackers inject malicious JavaScript code into your website through input fields.
+
+**Example Attack:**
+```javascript
+// Hacker enters this in a form:
+{
+  "name": "<script>alert('Hacked!')</script>",
+  "comment": "<img src=x onerror='alert(document.cookie)'>"
+}
+```
+
+**How `xss-clean` Protects:**
+```javascript
+const xss = require("xss-clean");
+app.use(xss());
+```
+
+**What it does:**
+- Removes HTML/JavaScript from user input
+- Sanitizes strings in body, query, and params
+- Prevents script injection
+
+**Before XSS Clean:**
+```javascript
+req.body = {
+    name: "<script>alert('XSS')</script>",
+    comment: "<img src=x onerror='alert(1)'>"
+}
+```
+
+**After XSS Clean:**
+```javascript
+req.body = {
+    name: "",
+    comment: ""
+}
+```
+
+**Why This Matters:**
+- Prevents hackers from stealing user data
+- Stops malicious code execution
+- Protects your users' browsers
+
+---
+
+### 5. **Rate Limiting** ⏱️
+
+**What is Rate Limiting?**
+Limiting how many requests a user can make in a specific time period. Like a bouncer at a club saying "only 100 people per hour."
+
+**Why Use Rate Limiting?**
+- Prevent brute force attacks (trying many passwords)
+- Stop DDoS attacks (overwhelming your server)
+- Prevent API abuse
+- Save server resources
+
+**Basic Setup:**
+```javascript
+const rateLimit = require("express-rate-limit");
+
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,  // 15 minutes
+    max: 100,                   // Max 100 requests per IP
+    message: "Too many requests, please try again later"
+});
+
+app.use(limiter);  // Apply to all routes
+```
+
+**Configuration Options:**
+```javascript
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,           // Time window (15 minutes)
+    max: 100,                            // Max requests per window
+    message: "Too many requests",        // Error message
+    statusCode: 429,                     // HTTP status code
+    standardHeaders: true,               // Return rate limit info in headers
+    legacyHeaders: false,                // Disable X-RateLimit-* headers
+    skipSuccessfulRequests: false,       // Count successful requests
+    skipFailedRequests: false,           // Count failed requests
+    keyGenerator: (req) => req.ip,       // Use IP address as key
+});
+```
+
+**Different Limits for Different Routes:**
+```javascript
+// Strict limit for login (prevent brute force)
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,  // Only 5 login attempts per 15 minutes
+    message: "Too many login attempts, try again later"
+});
+
+// Relaxed limit for general API
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100
+});
+
+// Apply to specific routes
+app.post("/api/users/signin", loginLimiter, signin);
+app.use("/api", apiLimiter);
+```
+
+**Response When Limit Exceeded:**
+```json
+{
+  "message": "Too many requests, please try again later"
+}
+```
+
+**Headers Sent:**
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1638360000
+Retry-After: 900
+```
+
+---
+
+### 6. **Helmet (Security Headers)** 🪖
+
+**What is Helmet?**
+Helmet sets various HTTP headers to protect your app from common web vulnerabilities.
+
+**Why Use Helmet?**
+- Prevents clickjacking attacks
+- Disables browser features that can be exploited
+- Hides technology information
+- Enforces HTTPS
+- Prevents MIME type sniffing
+
+**Basic Setup:**
+```javascript
+const helmet = require("helmet");
+app.use(helmet());
+```
+
+**What Helmet Does:**
+Helmet sets these security headers automatically:
+
+1. **Content-Security-Policy** - Prevents XSS attacks
+2. **X-DNS-Prefetch-Control** - Controls browser DNS prefetching
+3. **X-Frame-Options** - Prevents clickjacking
+4. **X-Powered-By** - Hides Express.js (security through obscurity)
+5. **Strict-Transport-Security** - Enforces HTTPS
+6. **X-Download-Options** - Prevents IE from executing downloads
+7. **X-Content-Type-Options** - Prevents MIME sniffing
+8. **X-Permitted-Cross-Domain-Policies** - Controls Adobe products
+
+**Custom Configuration:**
+```javascript
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            scriptSrc: ["'self'"],
+            imgSrc: ["'self'", "data:", "https:"]
+        }
+    },
+    hsts: {
+        maxAge: 31536000,           // 1 year in seconds
+        includeSubDomains: true,
+        preload: true
+    }
+}));
+```
+
+**Disable Specific Headers:**
+```javascript
+app.use(helmet({
+    contentSecurityPolicy: false,  // Disable CSP
+    xPoweredBy: false              // Keep X-Powered-By header
+}));
+```
+
+---
+
+### 7. **CORS (Cross-Origin Resource Sharing)** 🌐
+
+**What is CORS?**
+CORS allows your API (backend) to accept requests from different domains (frontend). Without CORS, browsers block these requests for security.
+
+**Example Scenario:**
+- Your API: `http://localhost:3000`
+- Your Frontend: `http://localhost:5173` (React/Vite)
+- Without CORS: Browser blocks requests ❌
+- With CORS: Requests work ✅
+
+**Basic Setup (Allow All Origins):**
+```javascript
+const cors = require("cors");
+app.use(cors());  // Allows all origins
+```
+
+**Allow Specific Origin:**
+```javascript
+app.use(cors({
+    origin: "http://localhost:5173"  // Only allow this frontend
+}));
+```
+
+**Allow Multiple Origins:**
+```javascript
+app.use(cors({
+    origin: [
+        "http://localhost:5173",
+        "http://localhost:3001",
+        "https://myapp.com"
+    ]
+}));
+```
+
+**Dynamic Origin (Function):**
+```javascript
+app.use(cors({
+    origin: function (origin, callback) {
+        const allowedOrigins = [
+            "http://localhost:5173",
+            "https://myapp.com"
+        ];
+        
+        // Allow requests with no origin (mobile apps, Postman)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.includes(origin)) {
+            callback(null, true);  // Allow
+        } else {
+            callback(new Error("Not allowed by CORS"));  // Block
+        }
+    }
+}));
+```
+
+**Full CORS Configuration:**
+```javascript
+app.use(cors({
+    origin: "http://localhost:5173",     // Allowed origin
+    methods: ["GET", "POST", "PUT", "DELETE"],  // Allowed methods
+    allowedHeaders: ["Content-Type", "Authorization"],  // Allowed headers
+    credentials: true,                   // Allow cookies
+    optionsSuccessStatus: 200            // For legacy browsers
+}));
+```
+
+**CORS for Specific Routes:**
+```javascript
+// Enable CORS for all routes
+app.use(cors());
+
+// Or enable for specific routes only
+app.get("/api/public", cors(), publicRoute);
+app.post("/api/users", cors({ origin: "http://localhost:5173" }), createUser);
+```
+
+**CORS Error Example:**
+```
+Access to fetch at 'http://localhost:3000/api/users' from origin
+'http://localhost:5173' has been blocked by CORS policy
+```
+
+**Solution:** Add CORS middleware!
+
+---
+
+### 8. **Complete Security Middleware Order** 📋
+
+**Correct Order (VERY IMPORTANT):**
+```javascript
+const express = require("express");
+const app = express();
+
+// 1. Body Parser (FIRST)
+app.use(express.json());
+
+// 2. Security Middleware (BEFORE routes)
+app.use(mongoSanitize());
+app.use(xss());
+app.use(helmet());
+app.use(cors());
+app.use(limiter);
+
+// 3. Routes
+app.use("/api", routes);
+
+// 4. Error Handler (LAST)
+app.use((error, req, res, next) => {
+    res.status(500).json({ error: error.message });
+});
+```
+
+**Why This Order?**
+1. **Body Parser First** - Parse request body
+2. **Security Middleware** - Clean and protect data
+3. **Routes** - Process requests
+4. **Error Handler Last** - Catch all errors
+
+**Wrong Order (DON'T DO THIS):**
+```javascript
+// ❌ WRONG - Security after routes
+app.use("/api", routes);
+app.use(mongoSanitize());  // Too late! Routes already executed
+```
+
+---
+
+### 9. **Testing Security Middleware** 🧪
+
+#### Test MongoDB Injection Protection:
+```javascript
+// Try this malicious request:
+POST http://localhost:3000/api/users/signin
+{
+  "email": { "$gt": "" },
+  "password": { "$gt": "" }
+}
+
+// With mongoSanitize: Request is cleaned, login fails ✅
+// Without mongoSanitize: Might bypass authentication ❌
+```
+
+#### Test XSS Protection:
+```javascript
+// Try this malicious request:
+POST http://localhost:3000/api/jobs
+{
+  "title": "<script>alert('XSS')</script>",
+  "company": "Test Corp"
+}
+
+// With xss-clean: Script tags removed ✅
+// Without xss-clean: Script stored in database ❌
+```
+
+#### Test Rate Limiting:
+```javascript
+// Send 101 requests quickly to any endpoint
+// First 100: Success (200 OK)
+// 101st request: Error (429 Too Many Requests)
+```
+
+#### Test CORS:
+```javascript
+// From browser console on http://localhost:5173:
+fetch('http://localhost:3000/api/users')
+  .then(res => res.json())
+  .then(data => console.log(data));
+
+// With CORS: Success ✅
+// Without CORS: CORS error ❌
+```
+
+---
+
+### 10. **Security Best Practices** 🔐
+
+#### 1. **Always Use HTTPS in Production**
+```javascript
+// In production, enforce HTTPS
+if (process.env.NODE_ENV === 'production') {
+    app.use((req, res, next) => {
+        if (req.header('x-forwarded-proto') !== 'https') {
+            res.redirect(`https://${req.header('host')}${req.url}`);
+        } else {
+            next();
+        }
+    });
+}
+```
+
+#### 2. **Different Rate Limits for Different Routes**
+```javascript
+// Strict for authentication
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5
+});
+
+// Relaxed for general API
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100
+});
+
+app.post("/api/users/signin", authLimiter, signin);
+app.use("/api", apiLimiter);
+```
+
+#### 3. **Whitelist CORS Origins in Production**
+```javascript
+const allowedOrigins = process.env.NODE_ENV === 'production'
+    ? ['https://myapp.com', 'https://www.myapp.com']
+    : ['http://localhost:5173', 'http://localhost:3000'];
+
+app.use(cors({ origin: allowedOrigins }));
+```
+
+#### 4. **Log Security Events**
+```javascript
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    handler: (req, res) => {
+        console.warn(`Rate limit exceeded for IP: ${req.ip}`);
+        res.status(429).json({ message: "Too many requests" });
+    }
+});
+```
+
+#### 5. **Combine All Security Measures**
+```javascript
+// Use ALL security middleware together
+app.use(express.json());
+app.use(mongoSanitize());
+app.use(xss());
+app.use(helmet());
+app.use(cors({ origin: allowedOrigins }));
+app.use(limiter);
+```
+
+---
+
+## 🔑 Important Security Concepts
+
+### 1. **Defense in Depth**
+Use multiple layers of security:
+- Input validation (schema + middleware)
+- Sanitization (mongoSanitize + xss-clean)
+- Rate limiting
+- Authentication & authorization
+- Security headers (helmet)
+- HTTPS in production
+
+### 2. **Security Middleware Order**
+```
+Request → Body Parser → Security Middleware → Routes → Error Handler
+```
+
+### 3. **Common Security Attacks**
+
+| Attack Type | What It Is | Prevention |
+|-------------|------------|------------|
+| **SQL/NoSQL Injection** | Malicious database queries | `express-mongo-sanitize` |
+| **XSS** | Injecting malicious scripts | `xss-clean` |
+| **Brute Force** | Trying many passwords | `express-rate-limit` |
+| **DDoS** | Overwhelming server | `express-rate-limit` |
+| **Clickjacking** | Tricking users to click | `helmet` (X-Frame-Options) |
+| **MIME Sniffing** | Browser guessing file types | `helmet` (X-Content-Type-Options) |
+
+### 4. **Production vs Development**
+
+**Development:**
+```javascript
+app.use(cors({ origin: "*" }));  // Allow all origins
+const limiter = rateLimit({ max: 1000 });  // Relaxed limit
+```
+
+**Production:**
+```javascript
+app.use(cors({ origin: "https://myapp.com" }));  // Specific origin
+const limiter = rateLimit({ max: 100 });  // Strict limit
+app.use(helmet());  // Always use helmet in production
+```
+
+### 5. **Monitoring Security**
+```javascript
+// Log rate limit violations
+const limiter = rateLimit({
+    max: 100,
+    handler: (req, res) => {
+        console.warn(`Rate limit hit: ${req.ip} - ${req.path}`);
+        res.status(429).json({ message: "Too many requests" });
+    }
+});
+
+// Log CORS violations
+app.use(cors({
+    origin: function (origin, callback) {
+        if (!allowedOrigins.includes(origin)) {
+            console.warn(`CORS blocked: ${origin}`);
+        }
+        callback(null, allowedOrigins.includes(origin));
+    }
+}));
+```
 
 ---
 
