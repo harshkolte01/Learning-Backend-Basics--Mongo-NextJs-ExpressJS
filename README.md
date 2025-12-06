@@ -1637,7 +1637,7 @@ Gmail doesn't allow apps to use your regular password for security. You need a s
 3. **Add to `.env` file:**
    ```env
    GOOGLE_EMAIL=your-email@gmail.com
-   GOOGLE_APP_PASSWORD=gmej ocnn ejgd kgub
+   GOOGLE_APP_PASSWORD=your app password
    ```
 
 **Important:**
