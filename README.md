@@ -13,7 +13,7 @@ npm init -y
 
 ### 2. Install Dependencies
 ```bash
-npm install express mongoose dotenv
+npm install express mongoose dotenv bcryptjs jsonwebtoken
 npm install nodemon --save-dev
 npm install --save-dev @types/node @types/mongoose
 ```
@@ -22,6 +22,8 @@ npm install --save-dev @types/node @types/mongoose
 - `express` - Web framework for building APIs
 - `mongoose` - MongoDB object modeling tool
 - `dotenv` - Loads environment variables from .env file
+- `bcryptjs` - Password hashing library for security
+- `jsonwebtoken` - Create and verify JWT tokens for authentication
 - `nodemon` - Auto-restarts server when files change (dev only)
 - `@types/node` & `@types/mongoose` - Better autocomplete in VS Code
 
@@ -78,9 +80,16 @@ my-api-project/
 Create a `.env` file in your project root:
 ```env
 MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/databaseName?retryWrites=true&w=majority
+PASSWORD_SALT_ROUNDS=10
+JWT_EXPIRY=1d
+JWT_SECRET_KEY=your-super-secret-key-here-change-this
 ```
 
-**Important:** Replace `username`, `password`, and `databaseName` with your actual values!
+**Important:**
+- Replace `username`, `password`, and `databaseName` with your actual values
+- Change `JWT_SECRET_KEY` to a random, secure string (never share this!)
+- `PASSWORD_SALT_ROUNDS` - Higher = more secure but slower (10 is good)
+- `JWT_EXPIRY` - Token validity period (1d = 1 day, 7d = 7 days, 1h = 1 hour)
 
 ### Step 3: Database Connection File
 Create `dbConnection.js`:
@@ -765,17 +774,437 @@ const totalJobs = await Jobs.countDocuments(query);
 
 ---
 
+## 🔐 Authentication & Authorization
+
+### What is Authentication?
+**Authentication** = Verifying who you are (like showing your ID card)
+**Authorization** = Checking what you're allowed to do (like checking if you have permission to enter a room)
+
+---
+
+### 1. **Password Hashing with bcrypt** 🔒
+
+**Why Hash Passwords?**
+Never store passwords in plain text! If someone hacks your database, they'll see all passwords.
+
+**What is Hashing?**
+- Converts password into a random-looking string
+- One-way process (can't reverse it)
+- Same password always gives same hash
+- Even small change in password gives completely different hash
+
+**Example:**
+```
+Password: "mypassword123"
+Hashed:   "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+```
+
+**Implementation:**
+```javascript
+const bcrypt = require('bcryptjs');
+
+// Hashing password (during signup)
+const hashedPassword = await bcrypt.hash(password, 10);
+// 10 = salt rounds (higher = more secure but slower)
+
+// Comparing password (during login)
+const isMatch = await bcrypt.compare(password, hashedPassword);
+// Returns true if password matches, false otherwise
+```
+
+---
+
+### 2. **JWT (JSON Web Token)** 🎫
+
+**What is JWT?**
+A token that proves you're logged in. Like a ticket that says "This person is authenticated."
+
+**JWT Structure:**
+```
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+```
+
+**Three Parts (separated by `.`):**
+1. **Header** - Token type and algorithm
+2. **Payload** - User data (userId, email, etc.)
+3. **Signature** - Verifies token hasn't been tampered with
+
+**Creating JWT:**
+```javascript
+const jwt = require('jsonwebtoken');
+
+const token = jwt.sign(
+    { userId: user._id, email: user.email },  // Payload (data)
+    process.env.JWT_SECRET_KEY,               // Secret key
+    { expiresIn: '1d' }                       // Expires in 1 day
+);
+```
+
+**Verifying JWT:**
+```javascript
+const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+console.log(decoded);  // { userId: '...', email: '...', iat: ..., exp: ... }
+```
+
+---
+
+### 3. **User Registration (Signup)** 📝
+
+**Flow:**
+1. User sends name, email, password
+2. Check if email already exists
+3. Hash the password
+4. Save user to database
+5. Return success message
+
+**Controller (`controllers/userController.js`):**
+```javascript
+exports.postUsers = async (req, res, next) => {
+    try {
+        const { name, email, password } = req.body;
+        
+        // Check if user already exists
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ message: "User already exists" });
+        }
+        
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+        
+        // Create user
+        const user = new User({ name, email, password: hashedPassword });
+        await user.save();
+        
+        res.status(201).json({ message: "User registered successfully" });
+    } catch (error) {
+        next(error);
+    }
+}
+```
+
+**Important Points:**
+- Always check if email already exists (prevent duplicates)
+- Never save plain text passwords
+- Use `bcrypt.hash()` with salt rounds (10 is standard)
+- Return 201 status for successful creation
+
+---
+
+### 4. **User Login (Signin)** 🔑
+
+**Flow:**
+1. User sends email and password
+2. Find user by email
+3. Compare password with hashed password
+4. If match, create JWT token
+5. Return token to user
+
+**Controller (`controllers/userController.js`):**
+```javascript
+exports.signin = async (req, res, next) => {
+    try {
+        const { email, password } = req.body;
+        
+        // Find user
+        const user = await User.findOne({ email });
+        if (!user) {
+            return res.status(400).json({ message: 'Invalid credentials' });
+        }
+        
+        // Compare password
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Invalid password' });
+        }
+        
+        // Create token
+        const token = jwt.sign(
+            { userId: user._id, email: user.email },
+            process.env.JWT_SECRET_KEY,
+            { expiresIn: '1d' }
+        );
+        
+        res.json({ token, message: "Login successful" });
+    } catch (error) {
+        next(error);
+    }
+}
+```
+
+**Important Points:**
+- Don't reveal if email or password is wrong (security)
+- Use generic message: "Invalid credentials"
+- Token should expire (1d, 7d, etc.)
+- Return token to client
+
+---
+
+### 5. **Protected Routes (Authentication Middleware)** 🛡️
+
+**What is Middleware?**
+Code that runs **before** your controller. Like a security guard checking your ticket before letting you in.
+
+**Middleware (`middleware/authMiddleware.js`):**
+```javascript
+exports.protect = async (req, res, next) => {
+    try {
+        // 1. Get token from header
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith("Bearer")) {
+            return res.status(401).json({ message: "Unauthorized" });
+        }
+        
+        // 2. Extract token
+        const token = authHeader.split(" ")[1];  // "Bearer token123" → "token123"
+        
+        // 3. Verify token
+        const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+        
+        // 4. Get user from database
+        const user = await User.findById(decoded.userId).select("-password");
+        if (!user) {
+            return res.status(401).json({ message: "User not found" });
+        }
+        
+        // 5. Attach user to request
+        req.user = user;  // Now available in controller!
+        next();  // Continue to controller
+        
+    } catch (error) {
+        return res.status(401).json({ message: "Invalid token" });
+    }
+}
+```
+
+**How to Use:**
+```javascript
+// routes/userRoute.js
+const { protect } = require("../middleware/authMiddleware");
+
+router.get("/users", protect, getUsers);  // Protected route
+//                    ↑ Middleware runs first
+```
+
+**Important Points:**
+- Token format: `Bearer <token>`
+- `.select("-password")` - Don't include password in user object
+- `req.user` - User data available in all controllers after this middleware
+- 401 status = Unauthorized (not logged in)
+
+---
+
+### 6. **Role-Based Access Control (Authorization)** 👑
+
+**What is RBAC?**
+Different users have different permissions. Example:
+- **User** - Can view jobs, apply for jobs
+- **Admin** - Can create, update, delete jobs
+
+**User Model with Roles (`models/Users.js`):**
+```javascript
+const userSchema = new mongoose.Schema({
+    name: String,
+    email: String,
+    password: String,
+    role: {
+        type: String,
+        enum: ["user", "admin"],  // Only these values allowed
+        default: "user"            // New users are "user" by default
+    }
+});
+```
+
+**Admin-Only Middleware (`middleware/authMiddleware.js`):**
+```javascript
+exports.adminOnly = async (req, res, next) => {
+    try {
+        if (req.user && req.user.role === "admin") {
+            next();  // User is admin, allow access
+        } else {
+            res.status(403).json({ message: "Admin only route" });
+        }
+    } catch (error) {
+        next(error);
+    }
+}
+```
+
+**How to Use:**
+```javascript
+// routes/userRoute.js
+const { protect, adminOnly } = require("../middleware/authMiddleware");
+
+// Only admins can access this
+router.get("/users", protect, adminOnly, getUsers);
+//                    ↑        ↑
+//                    Auth     Authorization
+```
+
+**Important Points:**
+- `protect` must come **before** `adminOnly`
+- 403 status = Forbidden (logged in but no permission)
+- `enum` in schema prevents invalid roles
+- `req.user.role` - Available because of `protect` middleware
+
+---
+
+### 7. **Middleware Chain Order** ⛓️
+
+**Order matters!**
+
+```javascript
+router.get("/users", protect, adminOnly, getUsers);
+```
+
+**Execution Flow:**
+1. `protect` - Check if user is logged in
+   - If not → Return 401 (Unauthorized)
+   - If yes → Attach `req.user` and continue
+2. `adminOnly` - Check if user is admin
+   - If not → Return 403 (Forbidden)
+   - If yes → Continue
+3. `getUsers` - Controller executes
+
+**Wrong Order:**
+```javascript
+router.get("/users", adminOnly, protect, getUsers);  // ❌ Wrong!
+// adminOnly runs first, but req.user doesn't exist yet!
+```
+
+---
+
+## 🔑 Important Authentication Concepts
+
+### 1. **HTTP Status Codes for Auth**
+
+| Code | Meaning | When to Use |
+|------|---------|-------------|
+| **200** | OK | Successful login |
+| **201** | Created | Successful signup |
+| **400** | Bad Request | Invalid credentials, user exists |
+| **401** | Unauthorized | No token, invalid token, expired token |
+| **403** | Forbidden | Valid token but no permission (not admin) |
+
+---
+
+### 2. **Authorization Header Format**
+
+**Client must send:**
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Breaking it down:**
+- `Authorization` - Header name
+- `Bearer` - Token type (standard for JWT)
+- Space
+- Actual token
+
+**In Thunder Client/Postman:**
+1. Go to "Headers" tab
+2. Add header:
+   - Key: `Authorization`
+   - Value: `Bearer <your-token-here>`
+
+---
+
+### 3. **Token Expiry**
+
+**Why tokens expire:**
+- Security (stolen tokens become useless after expiry)
+- Force users to re-login periodically
+
+**Common Expiry Times:**
+- `1h` - 1 hour (high security apps)
+- `1d` - 1 day (standard)
+- `7d` - 7 days (convenience)
+- `30d` - 30 days (long-lived sessions)
+
+**Setting Expiry:**
+```javascript
+jwt.sign(payload, secret, { expiresIn: '1d' });
+```
+
+---
+
+### 4. **Environment Variables for Auth**
+
+```env
+PASSWORD_SALT_ROUNDS=10
+JWT_EXPIRY=1d
+JWT_SECRET_KEY=your-super-secret-key-change-this
+```
+
+**Important:**
+- `JWT_SECRET_KEY` - Must be long, random, and secret
+- Never commit `.env` to Git
+- Use different secrets for dev/production
+- Change secret if compromised (all tokens become invalid)
+
+---
+
+### 5. **Security Best Practices**
+
+1. **Never store plain text passwords** ✅
+   ```javascript
+   // ❌ Wrong
+   const user = new User({ password: req.body.password });
+   
+   // ✅ Correct
+   const hashedPassword = await bcrypt.hash(req.body.password, 10);
+   const user = new User({ password: hashedPassword });
+   ```
+
+2. **Don't return password in responses** ✅
+   ```javascript
+   // ❌ Wrong
+   const user = await User.findById(id);
+   res.json(user);  // Includes password!
+   
+   // ✅ Correct
+   const user = await User.findById(id).select("-password");
+   res.json(user);  // Password excluded
+   ```
+
+3. **Use generic error messages** ✅
+   ```javascript
+   // ❌ Wrong (reveals if email exists)
+   if (!user) return res.json({ message: "Email not found" });
+   if (!isMatch) return res.json({ message: "Wrong password" });
+   
+   // ✅ Correct (generic message)
+   if (!user || !isMatch) {
+       return res.json({ message: "Invalid credentials" });
+   }
+   ```
+
+4. **Validate token on every protected request** ✅
+   - Don't trust client
+   - Always verify token server-side
+   - Check if user still exists
+
+---
+
 ## 🚀 Current API Endpoints
+
+### Authentication Endpoints:
+
+| Method | Endpoint | Description | Auth Required | Request Body | Response |
+|--------|----------|-------------|---------------|--------------|----------|
+| POST | `/api/users` | Register new user | No | `{ name, email, password }` | Success message |
+| POST | `/api/users/signin` | Login user | No | `{ email, password }` | `{ token, message }` |
+| GET | `/api/users` | Get all users | Yes (Admin only) | - | Array of users |
 
 ### Jobs API (Complete CRUD + Advanced Features):
 
-| Method | Endpoint | Description | Query Parameters | Response |
-|--------|----------|-------------|------------------|----------|
-| POST | `/api/jobs` | Create new job | - | Created job object |
-| GET | `/api/jobs` | Get all jobs with filters | `page`, `limit`, `sort`, `search`, `location` | Paginated job objects |
-| GET | `/api/jobs/:id` | Get single job | - | Single job object |
-| PUT | `/api/jobs/:id` | Update job | - | Updated job object |
-| DELETE | `/api/jobs/:id` | Delete job | - | `{ message: "Job Deleted" }` |
+| Method | Endpoint | Description | Auth Required | Query Parameters | Response |
+|--------|----------|-------------|---------------|------------------|----------|
+| POST | `/api/jobs` | Create new job | No | - | Created job object |
+| GET | `/api/jobs` | Get all jobs with filters | No | `page`, `limit`, `sort`, `search`, `location` | Paginated job objects |
+| GET | `/api/jobs/:id` | Get single job | No | - | Single job object |
+| PUT | `/api/jobs/:id` | Update job | No | - | Updated job object |
+| DELETE | `/api/jobs/:id` | Delete job | No | - | `{ message: "Job Deleted" }` |
 
 **Query Parameters Explained:**
 - `page` - Page number (default: 1)
@@ -790,8 +1219,127 @@ const totalJobs = await Jobs.countDocuments(query);
 |--------|----------|-------------|
 | GET | `/` | Check if API is working |
 | GET | `/api/ping` | Test ping endpoint |
-| GET | `/api/users` | Get all users |
-| POST | `/api/users` | Create new user |
+
+---
+
+## 🧪 Testing Authentication
+
+### 1. SIGNUP - Register New User
+```
+POST http://localhost:3000/api/users
+Content-Type: application/json
+
+{
+  "name": "John Doe",
+  "email": "john@example.com",
+  "password": "securepassword123"
+}
+```
+
+**Response (201 Created):**
+```json
+{
+  "message": "User registered successfully"
+}
+```
+
+**Error Response (400 - User Exists):**
+```json
+{
+  "message": "User already exist with this email."
+}
+```
+
+---
+
+### 2. SIGNIN - Login User
+```
+POST http://localhost:3000/api/users/signin
+Content-Type: application/json
+
+{
+  "email": "john@example.com",
+  "password": "securepassword123"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2NzUyZjE3N2JjZjg2Y2Q3OTk0MzkwMTEiLCJlbWFpbCI6ImpvaG5AZXhhbXBsZS5jb20iLCJpYXQiOjE3MzM0NzU2MDAsImV4cCI6MTczMzU2MjAwMH0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+  "message": "Login Successful"
+}
+```
+
+**Error Response (400 - Invalid Credentials):**
+```json
+{
+  "message": "Invalid Credentials"
+}
+```
+
+**Important:** Save the token! You'll need it for protected routes.
+
+---
+
+### 3. GET USERS - Protected Route (Admin Only)
+```
+GET http://localhost:3000/api/users
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Response (200 OK - If Admin):**
+```json
+[
+  {
+    "_id": "6752f177bcf86cd799439011",
+    "name": "John Doe",
+    "email": "john@example.com",
+    "role": "admin"
+  },
+  {
+    "_id": "6752f177bcf86cd799439012",
+    "name": "Jane Smith",
+    "email": "jane@example.com",
+    "role": "user"
+  }
+]
+```
+
+**Error Response (401 - No Token):**
+```json
+{
+  "message": "Unauthorized. Not A Valid Token"
+}
+```
+
+**Error Response (403 - Not Admin):**
+```json
+{
+  "message": "Admin only Route"
+}
+```
+
+---
+
+### Testing in Thunder Client:
+
+#### For Signup/Signin:
+1. Create new request
+2. Set method to POST
+3. Enter URL
+4. Go to "Body" → Select "JSON"
+5. Enter user data
+6. Click Send
+
+#### For Protected Routes:
+1. First, login and copy the token
+2. Create new request
+3. Go to "Headers" tab
+4. Add header:
+   - Key: `Authorization`
+   - Value: `Bearer <paste-token-here>`
+5. Click Send
 
 ---
 
@@ -1053,13 +1601,25 @@ GET http://localhost:3000/api/jobs?search=developer&location=Remote&sort=-salary
 13. ❌ Forgetting to use `req.params.id` for route parameters
 14. ❌ Not returning proper response after operations
 
-### Advanced Features (NEW):
+### Advanced Features:
 15. ❌ Using empty string `""` in `$regex` (causes error)
 16. ❌ Not using `parseInt()` for page and limit (causes NaN)
 17. ❌ Wrong calculation: `skip = (page - 1) * skip` instead of `* limit`
 18. ❌ Forgetting to check if search exists before using `$regex`
 19. ❌ Not using `countDocuments()` with same query as `find()`
 20. ❌ Wrong query chaining order (limit before skip, etc.)
+
+### Authentication & Security (NEW):
+21. ❌ Storing passwords in plain text (always hash with bcrypt!)
+22. ❌ Not checking if user already exists during signup
+23. ❌ Returning password in API responses (use `.select("-password")`)
+24. ❌ Revealing if email or password is wrong (use generic "Invalid credentials")
+25. ❌ Not validating token on protected routes
+26. ❌ Wrong middleware order (adminOnly before protect)
+27. ❌ Committing `.env` file with JWT_SECRET_KEY to Git
+28. ❌ Using weak or short JWT secret keys
+29. ❌ Not setting token expiry (tokens should expire)
+30. ❌ Forgetting `Bearer` prefix in Authorization header
 
 ---
 
@@ -1086,10 +1646,17 @@ GET http://localhost:3000/api/jobs?search=developer&location=Remote&sort=-salary
 - [x] Filtering (by specific fields)
 - [x] Searching (regex pattern matching)
 - [x] Combining multiple features
+- [x] Password hashing (bcrypt)
+- [x] User registration (signup)
+- [x] User login (signin with JWT)
+- [x] JWT token creation and verification
+- [x] Protected routes (authentication middleware)
+- [x] Role-based access control (admin/user)
+- [x] Authorization middleware
 - [ ] Advanced validation (custom validators)
-- [ ] Password hashing (bcrypt)
-- [ ] Authentication (JWT)
-- [ ] Authorization (roles & permissions)
+- [ ] Refresh tokens
+- [ ] Password reset functionality
+- [ ] Email verification
 - [ ] File uploads
 - [ ] Relationships (populate)
 
@@ -1160,6 +1727,45 @@ req.query.location  // ?location=Remote
 // ?page=1&limit=5&sort=-salary&search=developer&location=Remote
 ```
 
+### Authentication Cheat Sheet:
+
+```javascript
+// HASH PASSWORD (Signup)
+const bcrypt = require('bcryptjs');
+const hashedPassword = await bcrypt.hash(password, 10);
+
+// COMPARE PASSWORD (Login)
+const isMatch = await bcrypt.compare(password, user.password);
+
+// CREATE JWT TOKEN
+const jwt = require('jsonwebtoken');
+const token = jwt.sign(
+    { userId: user._id, email: user.email },
+    process.env.JWT_SECRET_KEY,
+    { expiresIn: '1d' }
+);
+
+// VERIFY JWT TOKEN
+const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+
+// PROTECT MIDDLEWARE
+exports.protect = async (req, res, next) => {
+    const token = req.headers.authorization?.split(" ")[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+    req.user = await User.findById(decoded.userId).select("-password");
+    next();
+};
+
+// ADMIN ONLY MIDDLEWARE
+exports.adminOnly = (req, res, next) => {
+    if (req.user.role === "admin") next();
+    else res.status(403).json({ message: "Admin only" });
+};
+
+// USE IN ROUTES
+router.get("/users", protect, adminOnly, getUsers);
+```
+
 ### Error Handling Pattern:
 
 ```javascript
@@ -1181,7 +1787,8 @@ const schema = new mongoose.Schema({
     field1: { type: String, required: true },
     field2: { type: Number, min: 0, max: 1000 },
     field3: { type: String, unique: true },
-    field4: { type: Date, default: Date.now }
+    field4: { type: Date, default: Date.now },
+    role: { type: String, enum: ["user", "admin"], default: "user" }
 });
 ```
 
@@ -1199,31 +1806,39 @@ const schema = new mongoose.Schema({
 
 ## 🛡️ Security Best Practices
 
-1. **Never commit `.env` file** - Add to `.gitignore`
-2. **Use environment variables** for sensitive data
-3. **Validate all user input** in schema
-4. **Use try-catch blocks** for all database operations
-5. **Send proper error messages** (don't expose internal details)
-6. **Hash passwords** before saving (use bcrypt - next step!)
-7. **Use HTTPS** in production
-8. **Keep dependencies updated** - `npm audit fix`
+1. **Never commit `.env` file** - Add to `.gitignore` ✅
+2. **Use environment variables** for sensitive data ✅
+3. **Hash passwords with bcrypt** - Never store plain text ✅
+4. **Use strong JWT secret keys** - Long, random, and secret ✅
+5. **Set token expiry** - Tokens should expire (1d, 7d, etc.) ✅
+6. **Validate all user input** in schema ✅
+7. **Use try-catch blocks** for all database operations ✅
+8. **Don't return passwords** in API responses (`.select("-password")`) ✅
+9. **Use generic error messages** - Don't reveal if email exists ✅
+10. **Verify tokens on every request** - Don't trust client ✅
+11. **Use HTTPS in production** - Encrypt data in transit ✅
+12. **Keep dependencies updated** - `npm audit fix` ✅
+13. **Implement rate limiting** - Prevent brute force attacks (next step)
+14. **Use helmet.js** - Security headers (next step)
 
 ---
 
 ## 🎯 Next Steps
 
-Now that you've mastered CRUD operations with pagination, sorting, filtering, and searching, here's what to learn next:
+Now that you've mastered CRUD operations, authentication, and authorization, here's what to learn next:
 
-1. **Advanced Validation** - Custom validators, regex patterns, email validation
-2. **Password Hashing** - Using bcrypt for security
-3. **Authentication** - JWT tokens, login/signup, protected routes
-4. **Authorization** - User roles and permissions (admin, user, etc.)
+1. **Refresh Tokens** - Long-lived tokens for better UX
+2. **Password Reset** - Email-based password recovery
+3. **Email Verification** - Verify user email on signup
+4. **Advanced Validation** - Custom validators, regex patterns
 5. **File Uploads** - Handling images and documents with multer
 6. **Relationships** - Connecting models (populate, references)
-7. **Advanced Searching** - Search across multiple fields with `$or`
-8. **Rate Limiting** - Prevent API abuse
-9. **Caching** - Redis for faster responses
-10. **Testing** - Unit tests and integration tests
+7. **Rate Limiting** - Prevent brute force attacks (express-rate-limit)
+8. **Security Headers** - Using helmet.js
+9. **CORS** - Cross-Origin Resource Sharing
+10. **Testing** - Unit tests and integration tests (Jest, Supertest)
+11. **Logging** - Winston or Morgan for better debugging
+12. **API Documentation** - Swagger/OpenAPI
 
 ---
 
