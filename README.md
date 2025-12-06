@@ -13,7 +13,7 @@ npm init -y
 
 ### 2. Install Dependencies
 ```bash
-npm install express mongoose dotenv bcryptjs jsonwebtoken
+npm install express mongoose dotenv bcryptjs jsonwebtoken multer cloudinary
 npm install nodemon --save-dev
 npm install --save-dev @types/node @types/mongoose
 ```
@@ -24,6 +24,8 @@ npm install --save-dev @types/node @types/mongoose
 - `dotenv` - Loads environment variables from .env file
 - `bcryptjs` - Password hashing library for security
 - `jsonwebtoken` - Create and verify JWT tokens for authentication
+- `multer` - Middleware for handling file uploads (multipart/form-data)
+- `cloudinary` - Cloud storage service for images and videos
 - `nodemon` - Auto-restarts server when files change (dev only)
 - `@types/node` & `@types/mongoose` - Better autocomplete in VS Code
 
@@ -83,6 +85,10 @@ MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/databaseName?ret
 PASSWORD_SALT_ROUNDS=10
 JWT_EXPIRY=1d
 JWT_SECRET_KEY=your-super-secret-key-here-change-this
+
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_SECRET_KEY=your-secret-key
 ```
 
 **Important:**
@@ -90,6 +96,7 @@ JWT_SECRET_KEY=your-super-secret-key-here-change-this
 - Change `JWT_SECRET_KEY` to a random, secure string (never share this!)
 - `PASSWORD_SALT_ROUNDS` - Higher = more secure but slower (10 is good)
 - `JWT_EXPIRY` - Token validity period (1d = 1 day, 7d = 7 days, 1h = 1 hour)
+- Get Cloudinary credentials from [Cloudinary Dashboard](https://cloudinary.com/console)
 
 ### Step 3: Database Connection File
 Create `dbConnection.js`:
@@ -1183,6 +1190,368 @@ JWT_SECRET_KEY=your-super-secret-key-change-this
    - Don't trust client
    - Always verify token server-side
    - Check if user still exists
+
+---
+
+## ✅ Input Validation
+
+### What is Validation?
+**Validation** = Checking if the data sent by the user is correct and complete before saving it to the database.
+
+**Why Validate?**
+- Prevent bad data from entering your database
+- Give users clear error messages
+- Protect your app from crashes
+- Ensure data consistency
+
+---
+
+### 1. **Two Types of Validation**
+
+#### Schema-Level Validation (Mongoose)
+Validation defined in your model schema. Mongoose checks this automatically.
+
+```javascript
+const jobSchema = new mongoose.Schema({
+    title: { type: String, required: true },  // Must provide title
+    company: { type: String },                 // Optional
+    salary: { type: Number, min: 0 }          // Must be positive
+});
+```
+
+#### Middleware Validation (Custom)
+Validation in middleware before reaching the controller. You write custom logic.
+
+```javascript
+exports.validateJobData = async (req, res, next) => {
+    const { title, company } = req.body;
+    if (!title || !company) {
+        return res.status(400).json({ message: "Title or company is missing" });
+    }
+    next();
+}
+```
+
+---
+
+### 2. **Schema-Level Validation** 📋
+
+**Common Validation Rules:**
+
+| Rule | What It Does | Example |
+|------|--------------|---------|
+| `required: true` | Field must be provided | `title: { type: String, required: true }` |
+| `unique: true` | No duplicates allowed | `email: { type: String, unique: true }` |
+| `minlength: 5` | Minimum string length | `password: { type: String, minlength: 8 }` |
+| `maxlength: 100` | Maximum string length | `title: { type: String, maxlength: 100 }` |
+| `min: 0` | Minimum number value | `salary: { type: Number, min: 0 }` |
+| `max: 1000000` | Maximum number value | `salary: { type: Number, max: 1000000 }` |
+| `enum: [...]` | Only specific values allowed | `role: { type: String, enum: ["user", "admin"] }` |
+| `default: value` | Default value if not provided | `createdAt: { type: Date, default: Date.now }` |
+
+**Example Schema with Validation:**
+```javascript
+const jobSchema = new mongoose.Schema({
+    title: {
+        type: String,
+        required: [true, "Title is required"],
+        minlength: [3, "Title must be at least 3 characters"],
+        maxlength: [100, "Title cannot exceed 100 characters"]
+    },
+    company: {
+        type: String,
+        required: [true, "Company name is required"]
+    },
+    location: {
+        type: String
+    },
+    salary: {
+        type: Number,
+        min: [0, "Salary cannot be negative"],
+        max: [10000000, "Salary seems too high"]
+    },
+    createdAt: {
+        type: Date,
+        default: Date.now
+    }
+});
+```
+
+**Custom Error Messages:**
+```javascript
+required: [true, "Custom error message here"]
+//         ↑      ↑
+//         Rule   Error message shown to user
+```
+
+---
+
+### 3. **Middleware Validation** 🛡️
+
+**When to Use Middleware Validation:**
+- Complex validation logic (checking multiple fields together)
+- Business rules (e.g., salary must be higher than minimum wage)
+- Checking if related data exists in database
+- Custom validation that Mongoose can't handle
+
+**Implementation (`middleware/jobMiddleware.js`):**
+```javascript
+exports.validateJobData = async (req, res, next) => {
+    try {
+        const { title, company } = req.body;
+        
+        // Check if required fields exist
+        if (!title || !company) {
+            return res.status(400).json({
+                message: "Title or company name is missing"
+            });
+        }
+        
+        // Check if title is too short
+        if (title.length < 3) {
+            return res.status(400).json({
+                message: "Title must be at least 3 characters"
+            });
+        }
+        
+        // If all validations pass, continue
+        next();
+        
+    } catch (error) {
+        next(error);
+    }
+}
+```
+
+**Using Validation Middleware:**
+```javascript
+// routes/jobRoute.js
+const { validateJobData } = require("../middleware/jobMiddleware");
+
+router.post("/jobs", validateJobData, postJob);
+//                    ↑ Validation runs before controller
+```
+
+**Execution Flow:**
+1. Request comes in
+2. `validateJobData` middleware runs
+   - If validation fails → Return 400 error
+   - If validation passes → Call `next()`
+3. `postJob` controller runs
+4. Data saved to database
+
+---
+
+### 4. **Validation Error Responses** ⚠️
+
+**Schema Validation Error:**
+```javascript
+// Request
+POST /api/jobs
+{
+  "company": "Tech Corp"
+  // Missing "title" field
+}
+
+// Response (400 Bad Request)
+{
+  "error": "Jobs validation failed: title: Path `title` is required."
+}
+```
+
+**Middleware Validation Error:**
+```javascript
+// Request
+POST /api/jobs
+{
+  "title": "Dev"
+  // Missing "company" field
+}
+
+// Response (400 Bad Request)
+{
+  "message": "Title or company name is missing"
+}
+```
+
+---
+
+### 5. **Validation Best Practices** 💡
+
+#### 1. **Validate Early**
+```javascript
+// ✅ Good - Validate in middleware before controller
+router.post("/jobs", validateJobData, postJob);
+
+// ❌ Bad - Validate inside controller (too late)
+exports.postJob = async (req, res) => {
+    if (!req.body.title) return res.status(400).json({...});
+    // ... rest of code
+}
+```
+
+#### 2. **Use Clear Error Messages**
+```javascript
+// ❌ Bad - Generic message
+{ message: "Invalid data" }
+
+// ✅ Good - Specific message
+{ message: "Title or company name is missing" }
+```
+
+#### 3. **Validate Data Types**
+```javascript
+// Check if salary is a number
+if (typeof salary !== 'number') {
+    return res.status(400).json({
+        message: "Salary must be a number"
+    });
+}
+```
+
+#### 4. **Trim Whitespace**
+```javascript
+const title = req.body.title?.trim();
+if (!title) {
+    return res.status(400).json({
+        message: "Title cannot be empty"
+    });
+}
+```
+
+#### 5. **Validate Email Format**
+```javascript
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+if (!emailRegex.test(email)) {
+    return res.status(400).json({
+        message: "Invalid email format"
+    });
+}
+```
+
+---
+
+### 6. **Combining Schema + Middleware Validation** 🎯
+
+**Best Approach:** Use both together!
+
+**Schema Validation (Basic Rules):**
+```javascript
+const jobSchema = new mongoose.Schema({
+    title: { type: String, required: true },
+    company: { type: String, required: true },
+    salary: { type: Number, min: 0 }
+});
+```
+
+**Middleware Validation (Complex Rules):**
+```javascript
+exports.validateJobData = async (req, res, next) => {
+    const { title, company, salary } = req.body;
+    
+    // Check required fields
+    if (!title || !company) {
+        return res.status(400).json({
+            message: "Title and company are required"
+        });
+    }
+    
+    // Check title length
+    if (title.trim().length < 3) {
+        return res.status(400).json({
+            message: "Title must be at least 3 characters"
+        });
+    }
+    
+    // Check if salary is reasonable
+    if (salary && (salary < 0 || salary > 10000000)) {
+        return res.status(400).json({
+            message: "Salary must be between 0 and 10,000,000"
+        });
+    }
+    
+    next();
+}
+```
+
+**Why Both?**
+- Schema validation = Safety net (catches everything)
+- Middleware validation = Better error messages (user-friendly)
+
+---
+
+### 7. **Validation Middleware Order** ⛓️
+
+**Correct Order:**
+```javascript
+router.post("/jobs", validateJobData, protect, postJob);
+//                   ↑ 1st          ↑ 2nd   ↑ 3rd
+//                   Validate       Auth    Controller
+```
+
+**Why This Order?**
+1. **Validate first** - No point checking auth if data is invalid
+2. **Then authenticate** - Check if user is logged in
+3. **Finally controller** - Process the request
+
+**Wrong Order:**
+```javascript
+router.post("/jobs", protect, validateJobData, postJob);  // ❌
+// Wastes time checking auth for invalid data
+```
+
+---
+
+## 🔑 Important Validation Concepts
+
+### 1. **Validation vs Sanitization**
+
+| Validation | Sanitization |
+|------------|--------------|
+| Checks if data is correct | Cleans/modifies data |
+| Returns error if invalid | Fixes data automatically |
+| Example: "Email is required" | Example: Trim whitespace |
+
+**Example:**
+```javascript
+// Sanitization (clean data)
+const title = req.body.title?.trim().toLowerCase();
+
+// Validation (check data)
+if (!title) {
+    return res.status(400).json({ message: "Title is required" });
+}
+```
+
+---
+
+### 2. **Client-Side vs Server-Side Validation**
+
+| Client-Side (Frontend) | Server-Side (Backend) |
+|------------------------|----------------------|
+| Fast feedback to user | Security (can't be bypassed) |
+| Better UX | Must always be present |
+| Can be bypassed | Final line of defense |
+
+**Important:** Always validate on server-side! Client-side is optional but recommended.
+
+---
+
+### 3. **Validation Error Status Codes**
+
+| Code | When to Use |
+|------|-------------|
+| **400** | Bad Request - Invalid data format |
+| **422** | Unprocessable Entity - Valid format but business rule violation |
+
+**Example:**
+```javascript
+// 400 - Missing required field
+if (!title) return res.status(400).json({...});
+
+// 422 - Valid data but business rule fails
+if (salary < minimumWage) return res.status(422).json({...});
+```
 
 ---
 
