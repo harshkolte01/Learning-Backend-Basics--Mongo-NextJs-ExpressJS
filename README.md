@@ -1632,7 +1632,7 @@ Gmail doesn't allow apps to use your regular password for security. You need a s
    - Select "Mail" and "Other (Custom name)"
    - Enter name: "Node.js App"
    - Click "Generate"
-   - Copy the 16-character password (e.g., `gmej ocnn ejgd kgub`)
+   - Copy the 16-character password (e.g., `16 digit`)
 
 3. **Add to `.env` file:**
    ```env
